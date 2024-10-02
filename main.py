@@ -168,3 +168,10 @@ for matrix in confusion_matrices:
         break
 
 print(result)
+
+with open("metrics.csv", "w") as m:
+    c_w = csv.writer(m)
+    for key, value in result:
+        arr = [key, value]
+        c_w.writerow(arr)
+
