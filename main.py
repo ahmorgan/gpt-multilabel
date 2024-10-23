@@ -1,20 +1,12 @@
-import openpyxl # using openpyxl to iterate over excel file with data
 from openai import OpenAI
-import data_preprocessor
 import csv
 import numpy as np
-import os
 from sklearn.metrics import multilabel_confusion_matrix
 
 # using the OpenAI API to prompt GPT-x models for multi-label classification of data
 
+print("Setting up data / GPT-4...")
 client = OpenAI()
-
-# load excel file ("workbook"). data.xlsx is an excel spreadsheet with student responses
-workbook = openpyxl.load_workbook(filename='data.xlsx')
-
-# get access to excel spreadsheet
-spreadsheet = workbook.active
 
 # list of responses that will be given to the LLM
 response_prompts = []
@@ -27,7 +19,8 @@ questions = [
     "Do you have any current challenges in the course? If so, what are they?"
 ]
 
-labels = [
+# all labels for reference:
+"""
     "None",
     "Python and Coding",
     "Github",
@@ -41,30 +34,37 @@ labels = [
     "Group Work",
     "API",
     "Project"
+"""
+
+labels = [
+    "Python and Coding",
+    "Github",
+    "MySQL",
+    "Time Management and Motivation",
 ]
 
-# data preprocessing
-# iterate through spreadsheet, concatenate each question followed by each student sub-response into a string that represents the full response
-for row in spreadsheet.iter_rows(min_row=1, min_col=1, max_row=81, max_col=5, values_only=True):
-    full_student_response = ""
-    i = -1
-    for value in row:
-        i += 1
-        # special case - some spreadsheet cells are empty, which are treated as null values
-        if value is None:
-            full_student_response += f"{questions[i]}: N/A"
-            continue
-        full_student_response += f"{questions[i]}: {value} "
-    response_prompts.append(full_student_response)
+# minor data preprocessing
+# iterate through reflections, concatenate each question with each student sub-response into a string that represents the full reflection
+with open("gpt_reflections.csv", "r", encoding="utf-8") as gpt:
+    c_r = csv.reader(gpt)
+    for row in c_r:
+        full_student_response = ""
+        i = 0
+        for value in row:
+            full_student_response += f"{questions[i]}: {value} "
+            i += 1
+        response_prompts.append(full_student_response)
 
 # make prompts to GPT-x
 llm_classifications = []
 i = 0
 # number of reflections to classify
-num_predictions = 3
+num_predictions = 100
+
+print("GPT-4 making classifications...")
 for response in response_prompts:
     completion = client.chat.completions.create(
-        model="gpt-3.5-turbo",
+        model="chatgpt-4o-latest",
         # proompt engineering
         messages=[
             {"role": "system", "content": "You are a software engineering professor who has just received "
@@ -100,14 +100,15 @@ with open("unprocessed_predictions.csv", "w") as output:
         if i != len(llm_classifications)-1:
             output.write(",\n")
         i += 1
-
-print(llm_classifications)
 """
+print("Raw classifications:")
+print(llm_classifications)
 
+print("Encoding classifications...")
 # encode gpt responses to create a confusion matrix out of them
 gpt_preds_enc = []
 for classification in llm_classifications:
-    response = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    response = [0 for _ in range(0, len(labels))]
     i = 0
     for label in labels:
         # gpt output is not always formatted correctly, but
@@ -121,26 +122,21 @@ for classification in llm_classifications:
     print(response)
     gpt_preds_enc.append(response)
 
-
-# data.xlsx is my personal classifications as of time of writing, will switch
-# to consensus classifications when those get to me
-data_preprocessor.process_data(file_name="intermediate_preds.csv")
+# data_preprocessor.process_data(file_name="intermediate_preds.csv")
 true_preds_enc = []
 
-# encode the test dataset in the same way
-with open("intermediate_preds.csv", "r") as im:
-    csv_r = csv.reader(im)
+# encode the test dataset in the same way as the classifications
+#
+with open("gpt_test.csv", "r") as gpt_test:
+    csv_r = csv.reader(gpt_test)
     for row in csv_r:
-        response = []
-        for pred in row:
-            response.append(int(pred))
-        true_preds_enc.append(response)
+        # int cast is important because the csv reader casts the int to a string by default
+        true_preds_enc.append([int(pred) for pred in row])
 # remove now unneeded intermediate file
-# optional improvement: implement with pandas dataframes instead
-os.remove("intermediate_preds.csv")
+# os.remove("intermediate_preds.csv")
 
-true = np.array(true_preds_enc) # size num of reflections in dataset
-pred = np.array(gpt_preds_enc) # size num_predictions
+true = np.array(true_preds_enc)  # size num of reflections in dataset
+pred = np.array(gpt_preds_enc)  # size num_predictions
 
 # only first num_predictions predictions (true is every true prediction by default)
 true = true[:num_predictions]
@@ -148,12 +144,14 @@ true = true[:num_predictions]
 print(f"True values:\n{true}")
 print(f"Predictions:\n{pred}")
 
+print("Running metrics...")
 # generate confusion matrices and extract true positive, false negative,
 # true negative, and false negative counts for each label
 confusion_matrices = multilabel_confusion_matrix(true, pred)
 print(confusion_matrices)
 result = {}
 x = 0
+
 for matrix in confusion_matrices:
     # flatten confusion matrix to list
     matrix = matrix.ravel()
@@ -167,11 +165,13 @@ for matrix in confusion_matrices:
     if x >= len(labels):
         break
 
+print("Results:")
 print(result)
 
 with open("metrics.csv", "w") as m:
     c_w = csv.writer(m)
-    for key, value in result:
-        arr = [key, value]
+    for entry in result.items():
+        arr = [entry[0], entry[1]]
         c_w.writerow(arr)
 
+print("Results written to metrics.csv")
